@@ -1,0 +1,132 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <mpi.h>
+
+void pigeonhole_sort(int arr[], int n, int min_val, int range_size, int* sorted_arr) {
+    int pigeonholes[range_size];
+    for (int i = 0; i < range_size; i++) {
+        pigeonholes[i] = 0;
+    }
+
+    for (int i = 0; i < n; i++) {
+        pigeonholes[arr[i] - min_val]++;
+    }
+
+    int index = 0;
+    for (int i = 0; i < range_size; i++) {
+        while (pigeonholes[i] > 0) {
+            sorted_arr[index++] = i + min_val;
+            pigeonholes[i]--;
+        }
+    }
+}
+
+double getCurrentTime() {
+    struct timespec currentTime;
+    clock_gettime(CLOCK_MONOTONIC, &currentTime);
+    return (double)currentTime.tv_sec * 1000.0 + (double)currentTime.tv_nsec / 1000000.0;
+}
+
+int main(int argc, char** argv) {
+    int rank, size;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    int n;
+    double startTime, endTime, totalTime;
+    int min_val, max_val, range_size;
+
+    int* arr = NULL; // Declare arr
+
+    if (rank == 0) {
+        startTime = getCurrentTime();
+        int capacity = 10;
+        arr = malloc(capacity * sizeof(int));
+
+        FILE *file = fopen("T10I4D100K.dat.txt", "r");
+        if (file == NULL) {
+            fprintf(stderr, "Could not open the file for reading.\n");
+            free(arr);
+            MPI_Finalize();
+            return 1;
+        }
+
+        printf("Numbers read from the file: ");
+        int count = 0;
+
+        while (fscanf(file, "%d", &arr[count]) != EOF) {
+            printf("%d ", arr[count]);
+            count++;
+
+            if (count >= capacity) {
+                capacity *= 2;
+                arr = realloc(arr, capacity * sizeof(int));
+            }
+        }
+
+        fclose(file);
+
+        range_size = 100000;  // Assuming a fixed range size
+
+        n = count;
+    }
+
+    // Broadcast the necessary information
+    MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&range_size, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    int local_n = n / size;
+    int *local_arr = malloc(local_n * sizeof(int));
+    int *local_min = malloc(local_n * sizeof(int));
+    int *local_max = malloc(local_n * sizeof(int));
+
+    // Scatter the data to all processes
+    MPI_Scatter(arr, local_n, MPI_INT, local_arr, local_n, MPI_INT, 0, MPI_COMM_WORLD);
+
+    // Calculate the local min and max values
+    int local_min_val = local_arr[0];
+    int local_max_val = local_arr[0];
+    for (int i = 0; i < local_n; i++) {
+        if (local_arr[i] < local_min_val) {
+            local_min_val = local_arr[i];
+        }
+        if (local_arr[i] > local_max_val) {
+            local_max_val = local_arr[i];
+        }
+    }
+
+    // Reduce to find the global min and max values
+    MPI_Reduce(&local_min_val, &min_val, 1, MPI_INT, MPI_MIN, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_max_val, &max_val, 1, MPI_INT, MPI_MAX, 0, MPI_COMM_WORLD);
+
+    // Continue with the sorting process
+    int *sorted_arr = malloc(n * sizeof(int));
+
+    pigeonhole_sort(local_arr, local_n, min_val, range_size, sorted_arr);
+
+    // Gather the sorted data
+    MPI_Gather(sorted_arr, local_n, MPI_INT, sorted_arr, local_n, MPI_INT, 0, MPI_COMM_WORLD);
+
+    if (rank == 0) {
+        endTime = getCurrentTime();
+        totalTime = endTime - startTime;
+        printf("\nSorted array: ");
+        for (int i = 0; i < n; i++) {
+            printf("%d ", sorted_arr[i]);
+        }
+        printf("\nTime taken by the sorting process: %.5f milliseconds\n", totalTime);
+
+        free(arr);
+    }
+
+    free(local_arr);
+    free(local_min);
+    free(local_max);
+    free(sorted_arr);
+
+    MPI_Finalize();
+
+    return 0;
+}
